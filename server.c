@@ -3,7 +3,6 @@
 // Copyright ahahn94 2018
 
 #include "server.h"
-#include "payload.h"
 
 #define SERVERLINEHEADER "[MAIN]\t"
 
@@ -22,7 +21,7 @@ int broadcast;
  * @param payload Pointer to a function that takes a filedescriptor and returns an int (0 if all ok).
  * @return 0 if successful, 1 if not.
  */
-int start_server(int port_number, int client_count, int (*payload)(int)) {
+int start_server(int port_number, int client_count, int (*payload)(int), struct peer *peers, int semaphore_group_id) {
 
     // File descriptor for broadcast on all active connections.
     broadcast = 0;
@@ -39,6 +38,12 @@ int start_server(int port_number, int client_count, int (*payload)(int)) {
     int server_len = sizeof(server);
 
     int return_code = 0; // buffer for function return codes.
+
+    char help_text[] = "\tCTelnet - a simple telnet server written in C.\n\n"
+                       "Commands:\n\n"
+                       BOLD "peers" RESETFORMAT "\t\t\tList connected clients\n\n"
+                       BOLD "disconnect [ID]" RESETFORMAT "\t\tDisconnect the client with the given ID\n\n"
+                       BOLD "exit" RESETFORMAT "\t\t\tExit the server after disconnecting all clients";
 
     server.sin_family = AF_INET; // Set usage of IPv4.
     server.sin_port = htons(port_number); // Set server port.
@@ -86,7 +91,7 @@ int start_server(int port_number, int client_count, int (*payload)(int)) {
         return 1;
     } else {
         printf(GREEN SERVERLINEHEADER "Server started successfully" RESETFORMAT "\n\n");
-        printf(GREEN SERVERLINEHEADER "Press CTRL + C to disconnect all clients and stop the server." RESETFORMAT "\n\n");
+        printf("%s\n\n", help_text);
     }
 
     // Endless loop while waiting for connections.
@@ -97,10 +102,84 @@ int start_server(int port_number, int client_count, int (*payload)(int)) {
 
         // Create child process for new connection.
         if (fork() == 0) {
-            broadcast = client_connection;
             close(waiting_for_connections);
-            if ((return_code = payload(client_connection)) == 0) {
-                return 0;
+            broadcast = client_connection;
+
+            // Get clients IP address.
+            struct sockaddr_in client_address;
+            socklen_t client_address_length = sizeof(client_address);
+            getpeername(client_connection, (struct sockaddr *) &client_address, &client_address_length);
+            char tmp_ip_address; // IP address as string
+            strcpy(&tmp_ip_address, inet_ntoa(client_address.sin_addr));
+
+            // Copy to new char array to prevent unwanted alteration.
+            char ip_address[tmp_ip_address];
+            strcpy(ip_address, &tmp_ip_address);
+
+            int added_successfully = 0; // Set to 1 if added to peers.
+
+            // Add to peers.
+            for (int i = 0; i < client_count; ++i) {
+                if (peers[i].pid == 0) {
+                    struct sembuf enter, leave;
+
+                    enter.sem_num = (unsigned short) i;
+                    enter.sem_op = -1;
+                    enter.sem_flg = SEM_UNDO;
+
+                    leave.sem_num = (unsigned short) i;
+                    leave.sem_op = 1;
+                    leave.sem_flg = SEM_UNDO;
+
+
+                    semop(semaphore_group_id, &enter, (size_t) client_count);
+                    // Add client data to peers.
+                    peers[i].peer_id = i + 1;
+                    peers[i].pid = getpid();
+                    strcpy(peers[i].ip_address, ip_address);
+                    semop(semaphore_group_id, &leave, (size_t) client_count);
+
+                    added_successfully = 1;
+
+                    break;
+                }
+            }
+
+            // Check if client has been added to peers, disconnect if not.
+            if (added_successfully == 0) {
+                send_message(client_connection,
+                             RED "\nToo many peers! Please try again later! Disconnecting..." RESETFORMAT "\n\n");
+                close(client_connection);
+                exit(1);
+            }
+
+            return_code = payload(client_connection);
+
+            // Remove from peers.
+            for (int i = 0; i < client_count; ++i) {
+                if ((peers[i].pid == getpid())) {
+                    struct sembuf enter, leave;
+
+                    enter.sem_num = (unsigned short) i;
+                    enter.sem_op = -1;
+                    enter.sem_flg = SEM_UNDO;
+
+                    leave.sem_num = (unsigned short) i;
+                    leave.sem_op = 1;
+                    leave.sem_flg = SEM_UNDO;
+
+
+                    semop(semaphore_group_id, &enter, (size_t) client_count);
+                    peers[i].peer_id = 0;
+                    peers[i].pid = 0;
+                    strcpy(peers[i].ip_address, "");
+                    semop(semaphore_group_id, &leave, (size_t) client_count);
+                    break;
+                }
+            }
+
+            if (return_code == 0) {
+                exit(0);
             } else {
                 fprintf(stderr, "[%d]\tError during execution of the payload!\n\n", getpid());
                 return return_code;
@@ -122,7 +201,7 @@ void handleSigint(int sig) {
     // If broadcast is set, the current process has a client connection.
     if (broadcast != 0) {
         send_message(broadcast,
-                     "\n\n" RED "The server is going down for halt. Closing your session in 5 seconds." RESETFORMAT "\n\n");
+                     "\n\n" RED "The server will disconnect your session in 5 seconds." RESETFORMAT "\n\n");
         sleep(5);
         send_message(broadcast, GREEN "\tBye!" RESETFORMAT "\n\n");
         close(broadcast);

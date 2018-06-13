@@ -9,8 +9,12 @@
 #include <sys/wait.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <arpa/inet.h>
+#include <sys/sem.h>
 
-int start_server(int port_number, int client_count, int (*payload)(int));
+#include "peer.h"
+
+int start_server(int port_number, int client_count, int (*payload)(int), struct peer *peers, int semaphore_group_id);
 
 void handleSigint(int sig);
 

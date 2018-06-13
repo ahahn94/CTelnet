@@ -3,6 +3,7 @@
 // Copyright ahahn94 2018
 
 #include "payload.h"
+#include "server.h"
 
 #define BUFFERSIZE 2000
 
