@@ -42,6 +42,7 @@ int main() {
         peers[i].peer_id = 0;
         peers[i].pid = 0;
         strcpy(peers[i].ip_address, "");
+        peers[i].connection = 0;
     }
 
     /**
@@ -115,24 +116,6 @@ int main() {
 
                             // Kill connection and fork.
                             kill(pid, SIGINT);
-
-                            // Remove from peers.
-                            struct sembuf enter, leave;
-
-                            enter.sem_num = (unsigned short) i;
-                            enter.sem_op = -1;
-                            enter.sem_flg = SEM_UNDO;
-
-                            leave.sem_num = (unsigned short) i;
-                            leave.sem_op = 1;
-                            leave.sem_flg = SEM_UNDO;
-
-
-                            semop(peers_semaphore_id, &enter, (size_t) CLIENTCOUNT);
-                            peers[i].peer_id = 0;
-                            peers[i].pid = 0;
-                            strcpy(peers[i].ip_address, "");
-                            semop(peers_semaphore_id, &leave, (size_t) CLIENTCOUNT);
 
                             break;
                         }

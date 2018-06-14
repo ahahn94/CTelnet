@@ -14,6 +14,11 @@
 
 int broadcast;
 
+struct peer *server_peers;
+int server_client_count;
+int server_semaphore_group_id;
+
+
 /**
  * Start server.
  * @param port_number Port number of the new server.
@@ -23,10 +28,16 @@ int broadcast;
  */
 int start_server(int port_number, int client_count, int (*payload)(int), struct peer *peers, int semaphore_group_id) {
 
+    server_peers = peers;
+    server_client_count = client_count;
+    server_semaphore_group_id = semaphore_group_id;
+
     // File descriptor for broadcast on all active connections.
     broadcast = 0;
-    signal(SIGINT, handleSigint); // Connect SIGINT to the custom handler so ctrl + c causes a proper shutdown.
 
+    // Connect signals.
+    signal(SIGINT, handleSigint); // Connect SIGINT to the custom handler so ctrl + c causes a proper shutdown.
+    signal(SIGCHLD, handle_sigchld_server); // Handle end of a child process.
 
     // from netinet/receiving.h; contains a socket address (ip_add, port_num), inet version (v4, v6), etc.
     struct sockaddr_in server;
@@ -105,6 +116,16 @@ int start_server(int port_number, int client_count, int (*payload)(int), struct 
             close(waiting_for_connections);
             broadcast = client_connection;
 
+
+            // Close all copies of connections to other clients.
+            for (int i = 0; i < client_count; ++i) {
+                if (peers[i].connection != 0) {
+                    close(peers[i].connection);
+                }
+            }
+
+
+
             // Get clients IP address.
             struct sockaddr_in client_address;
             socklen_t client_address_length = sizeof(client_address);
@@ -137,6 +158,7 @@ int start_server(int port_number, int client_count, int (*payload)(int), struct 
                     peers[i].peer_id = i + 1;
                     peers[i].pid = getpid();
                     strcpy(peers[i].ip_address, ip_address);
+                    peers[i].connection = client_connection;
                     semop(semaphore_group_id, &leave, (size_t) client_count);
 
                     added_successfully = 1;
@@ -155,38 +177,20 @@ int start_server(int port_number, int client_count, int (*payload)(int), struct 
 
             return_code = payload(client_connection);
 
-            // Remove from peers.
-            for (int i = 0; i < client_count; ++i) {
-                if ((peers[i].pid == getpid())) {
-                    struct sembuf enter, leave;
-
-                    enter.sem_num = (unsigned short) i;
-                    enter.sem_op = -1;
-                    enter.sem_flg = SEM_UNDO;
-
-                    leave.sem_num = (unsigned short) i;
-                    leave.sem_op = 1;
-                    leave.sem_flg = SEM_UNDO;
-
-
-                    semop(semaphore_group_id, &enter, (size_t) client_count);
-                    peers[i].peer_id = 0;
-                    peers[i].pid = 0;
-                    strcpy(peers[i].ip_address, "");
-                    semop(semaphore_group_id, &leave, (size_t) client_count);
-                    break;
-                }
-            }
+            // The client will be removed from the peers by the SIGCHLD handler.
 
             if (return_code == 0) {
+
+                printf("Test Exit\n\n");
+
                 exit(0);
             } else {
                 fprintf(stderr, "[%d]\tError during execution of the payload!\n\n", getpid());
-                return return_code;
+                exit(return_code);
             }
         } else {
             // If parent process, close filedescriptor.
-            close(client_connection);
+//            close(client_connection);
         }
     }
     close(waiting_for_connections);
@@ -215,6 +219,42 @@ void handleSigint(int sig) {
         printf(GREEN SERVERLINEHEADER "Bye!" RESETFORMAT "\n\n");
     }
     exit(0);
+}
+
+
+void handle_sigchld_server(int sig) {
+    pid_t pid;
+    int status;
+
+    if((pid = waitpid(-1, &status, WNOHANG)) != -1) {
+
+        for (int i = 0; i < server_client_count; i++){
+            if (server_peers[i].pid == pid){
+                send_message(server_peers[i].connection, "test");
+                close(server_peers[i].connection);
+
+                struct sembuf enter, leave;
+
+                enter.sem_num = (unsigned short) i;
+                enter.sem_op = -1;
+                enter.sem_flg = SEM_UNDO;
+
+                leave.sem_num = (unsigned short) i;
+                leave.sem_op = 1;
+                leave.sem_flg = SEM_UNDO;
+
+
+                semop(server_semaphore_group_id, &enter, (size_t) server_client_count);
+                server_peers[i].peer_id = 0;
+                server_peers[i].pid = 0;
+                strcpy(server_peers[i].ip_address, "");
+                server_peers[i].connection = 0;
+                semop(server_semaphore_group_id, &leave, (size_t) server_client_count);
+
+                break;
+            }
+        }
+    }
 }
 
 /**

@@ -9,4 +9,5 @@ struct peer {
     int peer_id;
     int pid;
     char ip_address[16];
+    int connection;
 };

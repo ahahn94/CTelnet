@@ -21,3 +21,5 @@ void handleSigint(int sig);
 void send_message(int file_descriptor, char message[]);
 
 void send_inputline(int file_descriptor);
+
+void handle_sigchld_server(int sig) ;
